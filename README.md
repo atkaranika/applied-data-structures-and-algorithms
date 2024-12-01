@@ -14,3 +14,6 @@ This program implements a greedy algorithm to solve the clique partitioning prob
 - Support for "don't care" conditions ('x' or 'X') in test vectors
 - Duplicate test vector removal
 - Dynamic memory management for varying input sizes
+
+## Compile
+make
