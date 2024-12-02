@@ -181,7 +181,8 @@ int read_test_vectors(const char *filename, test_vector **vectors) {
   int capacity = 7000;
   test_vector *new_vectors;
   FILE *file;
-  
+  char temp_vector[TEST_VECTOR_LENGTH];  // Temporary buffer for reading
+  int i; 
   *vectors = (test_vector*)malloc(capacity * sizeof(test_vector));
   if (!*vectors) {
     fprintf(stderr, "Memory allocation failed\n");
@@ -195,20 +196,33 @@ int read_test_vectors(const char *filename, test_vector **vectors) {
     exit(1);
   }
 
-  while (fscanf(file, "%s", (*vectors)[count].vector) != EOF) {
-    (*vectors)[count].index = count + 1;
-    count++;
-
-    if (count >= capacity) {
-      capacity *= 2;
-      new_vectors = (test_vector*)realloc(*vectors, capacity * sizeof(test_vector));
-      if (!new_vectors) {
-        fprintf(stderr, "Memory reallocation failed\n");
-        free(*vectors);
-        fclose(file);
-        exit(1);
+  while (fscanf(file, "%s", temp_vector) != EOF) {
+    // Check if this vector already exists
+    int is_duplicate = 0;
+    for (i = 0; i < count; i++) {
+      if (strcmp((*vectors)[i].vector, temp_vector) == 0) {
+        is_duplicate = 1;
+        break;
       }
-      *vectors = new_vectors;
+    }
+    
+    // Only add if it's not a duplicate
+    if (!is_duplicate) {
+      strcpy((*vectors)[count].vector, temp_vector);
+      (*vectors)[count].index = count + 1;
+      count++;
+
+      if (count >= capacity) {
+        capacity *= 2;
+        new_vectors = (test_vector*)realloc(*vectors, capacity * sizeof(test_vector));
+        if (!new_vectors) {
+          fprintf(stderr, "Memory reallocation failed\n");
+          free(*vectors);
+          fclose(file);
+          exit(1);
+        }
+        *vectors = new_vectors;
+      }
     }
   }
 
@@ -278,13 +292,14 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
   int max_degree;
   int max_vertex;
   adj_list_node *temp;
-  int i,j;
+  int i,j,k;
   int degree, vertex;
   int sub_max_degree = -1;
   int sub_max_vertex = -1;
   int max_index = -1;
   sub_graph *new_subgraph;
   sub_graph *subgraph;
+  int *subgraph_indices;
   int clique_size = 1;
 
   if (!visited) {
@@ -294,6 +309,7 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
 
   // Main loop - continue until we find max_cliques or no more cliques possible //
   while (num_cliques_found < max_cliques) {
+    subgraph_indices = (int*)calloc(num_vertices, sizeof(int)); 
     // Reset dictionary entry template with don't-care bits //
     memset(current_dict_entry, 'X', TEST_VECTOR_LENGTH);
     current_dict_entry[TEST_VECTOR_LENGTH] = '\0';
@@ -310,17 +326,17 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
         // Count unvisited neighbors to get current degree //
         temp = graph[i]->head;
         while (temp) {
-          if (!visited[temp->vertex]) {
+          if (!visited[temp->vertex]) 
             degree++;
+            temp = temp->next;
           }
-          temp = temp->next;
         }
         if (degree > max_degree) {
           max_degree = degree;
           max_vertex = i;
         }
       }
-    }
+    
 
     // Exit if no unvisited vertices remain //
     if (max_vertex == -1) break;
@@ -332,6 +348,7 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
       // Add only unvisited neighbors of max_vertex
       if (!visited[temp->vertex]) {
         add_vertex(subgraph, temp->vertex);
+        subgraph_indices[temp->vertex] = 1;
       }
       temp = temp->next;
     }
@@ -356,18 +373,11 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
       for (i = 0; i < subgraph->count; i++) {
         vertex = subgraph->vertices[i];
         degree = 0;
-        adj_list_node *temp = graph[vertex]->head;
-        
-        // Count unvisited neighbors //
+        temp = graph[vertex]->head;
+        // Count unvisited neighbors that are in the subgraph //
         while (temp) {
-          if (!visited[temp->vertex]) {
-          // Count unvisited neighbors that are in the subgraph //
-          for (j = 0; j < subgraph->count; j++) {
-            if (subgraph->vertices[j] == temp->vertex) {
+          if (!visited[temp->vertex] && subgraph_indices[temp->vertex] == 1) {
               degree++;
-              break;
-            }
-          }
           }
           temp = temp->next;
         }
@@ -390,6 +400,7 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
       visited[sub_max_vertex] = 1;
       clique_size++;
       remove_vertex(subgraph, max_index);
+      subgraph_indices[max_index] = 0;
 
       // Create new subgraph containing only vertices connected to sub_max_vertex  //
       // This ensures we maintain clique property                                  //
@@ -400,11 +411,15 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
           for (i = 0; i < subgraph->count; i++) {
             if (subgraph->vertices[i] == temp->vertex) {
               add_vertex(new_subgraph, temp->vertex);
+              subgraph_indices[temp->vertex] = 1;
               break;
+            }
+            else {
+              subgraph_indices[temp->vertex] = 0;
             }
           }
         }
-          temp = temp->next;
+        temp = temp->next;
       }
 
       // Replace old subgraph with new filtered subgraph //
@@ -418,8 +433,8 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
     }
     // Write dictionary entry to file //
     fprintf(output_file, "%s\n", current_dict_entry);
-    printf("Clique %d: %s\n", num_cliques_found + 1, current_dict_entry);
-    printf("Clique size %d \n", clique_size);
+    // printf("Clique %d: %s\n", num_cliques_found + 1, current_dict_entry);
+    // printf("Clique size %d \n", clique_size);
     num_cliques_found++;
 
     // Clean up subgraph //
@@ -432,32 +447,6 @@ void identify_dict(FILE *output_file, adj_list **graph, test_vector *vectors, in
   }
 
   free(visited);
-}
-
-// remove_duplicates - Removes duplicate test vectors from the array //
-int remove_duplicates(test_vector **vectors, int num_vectors) {
-  int i, j, k;
-  int new_size = num_vectors;
-  
-  for (i = 0; i < new_size; i++) {
-    for (j = i + 1; j < new_size; ) {
-      if (strcmp((*vectors)[i].vector, (*vectors)[j].vector) == 0) {
-        // Shift remaining vectors left //
-        for (k = j; k < new_size - 1; k++) {
-          (*vectors)[k] = (*vectors)[k + 1];
-        }
-        new_size--;
-      } else {
-        j++;
-      }
-    }
-  }
-  
-  // Reallocate memory to new size if needed
-  if (new_size < num_vectors) {
-    *vectors = realloc(*vectors, new_size * sizeof(test_vector));
-  }
-  return new_size;
 }
 
 int main(int argc, char *argv[]) {
@@ -486,7 +475,8 @@ int main(int argc, char *argv[]) {
     free(vectors);
     return EXIT_FAILURE;
   }
-  num_vectors = remove_duplicates(&vectors, num_vectors);
+  // printf("%d\n", num_vectors);
+
 
   graph = create_graph(vectors, num_vectors);
   identify_dict(output_file, graph, vectors, num_vectors, dict_size);
